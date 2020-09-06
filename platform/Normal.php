@@ -5,6 +5,7 @@ function getpath()
     $_SERVER['firstacceptlanguage'] = strtolower(splitfirst(splitfirst($_SERVER['HTTP_ACCEPT_LANGUAGE'],';')[0],',')[0]);
     if (isset($_SERVER['HTTP_X_FORWARDED_FOR'])) $_SERVER['REMOTE_ADDR'] = $_SERVER['HTTP_X_FORWARDED_FOR'];
     $_SERVER['base_path'] = path_format(substr($_SERVER['SCRIPT_NAME'], 0, -10) . '/');
+    if (isset($_SERVER['UNENCODED_URL'])) $_SERVER['REQUEST_URI'] = $_SERVER['UNENCODED_URL'];
     $p = strpos($_SERVER['REQUEST_URI'],'?');
     if ($p>0) $path = substr($_SERVER['REQUEST_URI'], 0, $p);
     else $path = $_SERVER['REQUEST_URI'];
@@ -16,6 +17,7 @@ function getpath()
 
 function getGET()
 {
+    if (isset($_SERVER['UNENCODED_URL'])) $_SERVER['REQUEST_URI'] = $_SERVER['UNENCODED_URL'];
     $p = strpos($_SERVER['REQUEST_URI'],'?');
     if ($p>0) {
         $getstr = substr($_SERVER['REQUEST_URI'], $p+1);
@@ -52,12 +54,12 @@ function getConfig($str, $disktag = '')
         if (in_array($str, $InnerEnv)) {
             if ($disktag=='') $disktag = $_SERVER['disktag'];
             if (isset($envs[$disktag][$str])) {
-                if (in_array($str, $Base64Env)) return equal_replace($envs[$disktag][$str],1);
+                if (in_array($str, $Base64Env)) return base64y_decode($envs[$disktag][$str]);
                 else return $envs[$disktag][$str];
             }
         } else {
             if (isset($envs[$str])) {
-                if (in_array($str, $Base64Env)) return equal_replace($envs[$str],1);
+                if (in_array($str, $Base64Env)) return base64y_decode($envs[$str]);
                 else return $envs[$str];
             }
         }
@@ -80,7 +82,7 @@ function setConfig($arr, $disktag = '')
     $operatedisk = 0;
     foreach ($arr as $k => $v) {
         if (in_array($k, $InnerEnv)) {
-            if (in_array($k, $Base64Env)) $envs[$disktag][$k] = equal_replace($v);
+            if (in_array($k, $Base64Env)) $envs[$disktag][$k] = base64y_encode($v);
             else $envs[$disktag][$k] = $v;
             $indisk = 1;
         } elseif ($k=='disktag_add') {
@@ -91,7 +93,7 @@ function setConfig($arr, $disktag = '')
             $envs[$v] = '';
             $operatedisk = 1;
         } else {
-            if (in_array($k, $Base64Env)) $envs[$k] = equal_replace($v);
+            if (in_array($k, $Base64Env)) $envs[$k] = base64y_encode($v);
             else $envs[$k] = $v;
         }
     }
@@ -272,12 +274,14 @@ function setConfigResponse($response)
 
 function OnekeyUpate($auth = 'qkqpttgf', $project = 'OneManager-php', $branch = 'master')
 {
+    $slash = '/';
+    if (strpos(__DIR__, ':')) $slash = '\\';
     // __DIR__ is xxx/platform
-    $projectPath = splitlast(__DIR__, '/')[0];
+    $projectPath = splitlast(__DIR__, $slash)[0];
 
     // 从github下载对应tar.gz，并解压
     $url = 'https://github.com/' . $auth . '/' . $project . '/tarball/' . urlencode($branch) . '/';
-    $tarfile = $projectPath.'/github.tar.gz';
+    $tarfile = $projectPath . $slash .'github.tar.gz';
     $githubfile = file_get_contents($url);
     if (!$githubfile) return 0;
     file_put_contents($tarfile, $githubfile);
@@ -286,17 +290,17 @@ function OnekeyUpate($auth = 'qkqpttgf', $project = 'OneManager-php', $branch = 
         $phar->extractTo($projectPath, null, true);//路径 要解压的文件 是否覆盖
     } else {
         ob_start();
-        passthru('tar -xzvf '.$tarfile,$stat);
+        passthru('tar -xzvf ' . $tarfile, $stat);
         ob_get_clean();
     }
     unlink($tarfile);
 
     $outPath = '';
     $tmp = scandir($projectPath);
-    $name = $auth.'-'.$project;
+    $name = $auth . '-' . $project;
     foreach ($tmp as $f) {
         if ( substr($f, 0, strlen($name)) == $name) {
-            $outPath = $projectPath . '/' . $f;
+            $outPath = $projectPath . $slash . $f;
             break;
         }
     }
@@ -304,23 +308,27 @@ function OnekeyUpate($auth = 'qkqpttgf', $project = 'OneManager-php', $branch = 
     if ($outPath=='') return 0;
 
     //unlink($outPath.'/config.php');
-    rename($projectPath.'/config.php', $outPath.'/config.php');
-
-    return moveFolder($outPath, $projectPath);
+    $response = rename($projectPath . $slash . 'config.php', $outPath . $slash . 'config.php');
+    if (!$response) {
+        $tmp1['code'] = "Move Failed";
+        $tmp1['message'] = "Can not move " . $projectPath . $slash . 'config.php' . " to " . $outPath . $slash . 'config.php';
+        return json_encode($tmp1);
+    }
+    return moveFolder($outPath, $projectPath, $slash);
 }
 
-function moveFolder($from, $to)
+function moveFolder($from, $to, $slash)
 {
-    if (substr($from, -1)=='/') $from = substr($from, 0, -1);
-    if (substr($to, -1)=='/') $to = substr($to, 0, -1);
+    if (substr($from, -1)==$slash) $from = substr($from, 0, -1);
+    if (substr($to, -1)==$slash) $to = substr($to, 0, -1);
     if (!file_exists($to)) mkdir($to, 0777);
     $handler=opendir($from);
     while($filename=readdir($handler)) {
         if($filename != '.' && $filename != '..'){
-            $fromfile = $from.'/'.$filename;
-            $tofile = $to.'/'.$filename;
+            $fromfile = $from . $slash . $filename;
+            $tofile = $to . $slash . $filename;
             if(is_dir($fromfile)){// 如果读取的某个对象是文件夹，则递归
-                $response = moveFolder($fromfile, $tofile);
+                $response = moveFolder($fromfile, $tofile, $slash);
                 if (api_error(setConfigResponse($response))) return $response;
             }else{
                 //if (file_exists($tofile)) unlink($tofile);
